@@ -3,13 +3,24 @@
 
 import argparse
 import glob
+import os
 
 import imagehash
-from PIL import Image
+import magic
+import pyheif
+from PIL import Image, ImageFile, UnidentifiedImageError
 from tqdm import tqdm
 from icecream import ic
 
-EXTENSION = [".png", ".jpg"]
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+MIME_TYPES = ["image/png", "image/jpeg", "image/heic", "image/heif"]
+
+
+def is_image_file(file_path):
+    mime = magic.Magic(mime=True)
+    file_mime = mime.from_file(file_path)
+    return any(file_mime.startswith(mime_type) for mime_type in MIME_TYPES)
 
 
 def main(opt, hash_function=imagehash.phash):
@@ -29,23 +40,36 @@ def main(opt, hash_function=imagehash.phash):
 
     if verbose is False:
         ic.disable()
-
+ 
     list_of_images = []
     image_map = {}
 
-    for ext in EXTENSION:
-        for item in glob.glob(f"{input_directory}**/*{ext}", recursive=True):
-            list_of_images.append(item)
-
+    for root, dirs, files in os.walk(input_directory):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if is_image_file(file_path):
+                list_of_images.append(file_path)
     list_of_images.sort()
 
     for image_path in tqdm(list_of_images, desc="Loading Image: "):
         try:
             image = Image.open(image_path)
             hashed_image = hash_function(image)
-        except Exception as e:
-            print(e)
-            continue
+        except UnidentifiedImageError:
+            try:
+                heif_file = pyheif.read(image_path)
+                image = Image.frombytes(
+                    heif_file.mode,
+                    heif_file.size,
+                    heif_file.data,
+                    "raw",
+                    heif_file.mode,
+                    heif_file.stride,
+                )
+                hashed_image = hash_function(image)
+            except Exception as other_exception:
+                print(other_exception)
+                continue
 
         image_map[hashed_image] = image_map.get(hashed_image, []) + [image_path]
 
